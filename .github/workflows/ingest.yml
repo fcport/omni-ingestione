@@ -1,0 +1,44 @@
+name: Ingestione feed
+
+# Popola Notizie ed Eventi di Omni dalle Fonti sammarinesi.
+#
+# PERCHÉ QUESTO REPO È PUBBLICO. Le GitHub Actions sono illimitate sui repo
+# pubblici e contate su quelli privati. Dal 21 al 31 luglio 2026 l'ingestione è
+# rimasta ferma **undici giorni** perché i 2.000 minuti del piano privato erano
+# esauriti: i job non partivano nemmeno, l'app mostrava notizie ferme e nessuno
+# se n'è accorto finché il contatore non si è azzerato da solo il 1° agosto.
+# Qui quel guasto non può ripetersi.
+#
+# CADENZA ogni ora, di giorno. Sul privato erano due ore per risparmiare minuti;
+# qui il vincolo non c'è, e la freschezza conta: i feed delle testate espongono
+# solo 20-25 articoli, quindi una giornata prolifica scorre via fra un giro e
+# l'altro e quello che è uscito nel mezzo è perso per sempre. La notte resta
+# ferma perché nessuno pubblica alle 3.
+#
+# Niente Flutter: è un progetto Dart puro, l'SDK si tira su in pochi secondi.
+
+on:
+  schedule:
+    - cron: '0 5-21 * * *'
+  workflow_dispatch:
+
+concurrency:
+  group: ingest
+  cancel-in-progress: true
+
+jobs:
+  ingest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dart-lang/setup-dart@v1
+        with:
+          sdk: stable
+      - run: dart pub get
+      - name: Ingestione
+        env:
+          # L'host non è un segreto; il token sì, ed è l'unica cosa che questo
+          # repo conosce del database.
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          INGEST_TOKEN: ${{ secrets.INGEST_TOKEN }}
+        run: bash tool/ingest_all.sh
