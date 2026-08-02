@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0" xmlns:media="http://search.yahoo.com/mrss/" xmlns:content="http://purl.org/rss/1.0/modules/content/">
+  <channel>
+    <title>Testata di San Marino — Notizie</title>
+    <link>https://example.sm/notizie</link>
+    <description>Feed di prova per i test della pipeline</description>
+
+    <item>
+      <title>Approvata la nuova legge di bilancio</title>
+      <link>https://example.sm/notizie/bilancio</link>
+      <pubDate>Wed, 24 Jun 2026 09:30:00 +0000</pubDate>
+      <description>&lt;p&gt;Il Consiglio Grande e Generale ha approvato la manovra dopo una lunga seduta notturna. Il testo introduce misure su famiglie, imprese e sanità, con coperture pluriennali e un capitolo dedicato agli investimenti pubblici nei nove Castelli del territorio sammarinese, oltre a interventi sul welfare.&lt;/p&gt;</description>
+      <enclosure url="https://example.sm/img/bilancio.jpg" type="image/jpeg" length="12345"/>
+    </item>
+
+    <item>
+      <title>Lavori sulla Superstrada: deviazioni a Dogana</title>
+      <link>https://example.sm/notizie/superstrada</link>
+      <pubDate>Tue, 23 Jun 2026 17:00:00 +0000</pubDate>
+      <description>Modifiche alla viabilità per i prossimi giorni.</description>
+      <content:encoded><![CDATA[<p>Dettagli sui lavori.</p><img src="data:image/png;base64,AAAA" /><img class="wp-image-1" src="https://example.sm/img/superstrada.jpg" />]]></content:encoded>
+    </item>
+
+    <item>
+      <title>Approvata la nuova legge di bilancio!</title>
+      <link>https://altra-testata.sm/bilancio-2026</link>
+      <pubDate>Wed, 24 Jun 2026 11:00:00 +0000</pubDate>
+      <description>La manovra è stata approvata in nottata.</description>
+    </item>
+
+    <item>
+      <title>Notizia senza link, da ignorare</title>
+      <pubDate>Mon, 22 Jun 2026 08:00:00 +0000</pubDate>
+      <description>Manca il link, non è normalizzabile.</description>
+    </item>
+  </channel>
+</rss>

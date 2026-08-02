@@ -1,0 +1,20 @@
+name: omni_ingestione
+description: >-
+  Ingestione delle Notizie e degli Eventi di San Marino per Omni: legge i feed
+  delle testate, li normalizza, li deduplica e li consegna all'app.
+publish_to: none
+version: 1.0.0
+
+environment:
+  sdk: ^3.9.0
+
+# Dart puro, niente Flutter: il runner gira su un runner Linux nudo e parte in
+# pochi secondi invece dei minuti che costa tirare su l'SDK Flutter.
+dependencies:
+  html: ^0.15.4
+  http: ^1.2.2
+  xml: ^6.5.0
+
+dev_dependencies:
+  lints: ^5.0.0
+  test: ^1.25.0
