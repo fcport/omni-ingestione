@@ -17,9 +17,18 @@ name: Ingestione feed
 #
 # Niente Flutter: è un progetto Dart puro, l'SDK si tira su in pochi secondi.
 
+# MINUTO :37, NON :00. GitHub mette in coda i job schedulati e nei picchi di
+# carico li ritarda o li **salta**: il minuto zero di ogni ora è il momento più
+# affollato del pianeta, e ci si è visto subito. Il 2026-08-02 il giro delle
+# 20:00 non è mai partito, quello delle 21:00 è arrivato con due minuti di
+# ritardo, e i giri delle 05:00 e 06:00 del giorno dopo sono spariti: dieci ore
+# senza ingestione al primo giorno di esercizio. Un minuto spostato non dà
+# garanzie — la schedulazione resta best-effort — ma toglie di mezzo la coda
+# peggiore. Il guardiano su Supabase resta la rete: se il feed tace più di
+# quattro ore in fascia diurna, lo dice.
 on:
   schedule:
-    - cron: '0 5-21 * * *'
+    - cron: '37 5-21 * * *'
   workflow_dispatch:
 
 concurrency:
