@@ -17,6 +17,18 @@
 //   dart run bin/ingest.dart --formato html --tipo istituzionale --fonte 8 \
 //     --url https://host/indice \
 //     --selettori '{"link":"a.atto","titolo":"h1","testo":"article","max":20}' --push
+//
+// `--base` serve quando i link di dettaglio sono relativi a una cartella diversa
+// da quella dell'indice (vedi il Consiglio Grande e Generale in
+// `tool/ingest_istituzionale.sh`).
+//
+// ⚠️ TRANELLO NEI SELETTORI, SU WINDOWS: il carattere `^` **non sopravvive alla
+// riga di comando** — `div[id^=article_]` arriva al programma come
+// `div[id=article_]`, che non matcha niente, e il crawl ripiega in silenzio sui
+// fallback (h1 / paragrafi del body) restituendo il titolo del sito al posto di
+// quello del documento. Su Linux (i runner) il `^` passa: si finisce a testare
+// in locale una cosa diversa da quella che gira in produzione. Usare `*=` al
+// posto di `^=`.
 
 import 'dart:convert';
 import 'dart:io';
