@@ -1,9 +1,22 @@
-# Omni — ingestione delle Notizie e degli Eventi
+# Omni — ingestione dei contenuti pubblici di San Marino
 
-Legge i feed delle testate sammarinesi, normalizza gli articoli, toglie i
-doppioni e li consegna all'app [Omni](https://omnism.it).
+Legge le fonti sammarinesi, normalizza quello che pubblicano, toglie i doppioni
+e lo consegna all'app [Omni](https://omnism.it).
 
-Gira da solo ogni ora, dalle 7 alle 23 (ora di San Marino), su GitHub Actions.
+Quattro canali, cadenze diverse, tutti su GitHub Actions:
+
+| Canale | Quando | Cosa porta |
+|---|---|---|
+| Notizie (RSS) | ogni ora, 7–23 | gli articoli delle testate |
+| Eventi (scraping) | ogni ora, 7–23 | i calendari degli eventi |
+| Bandi (gov.sm) | ogni notte | concorsi e selezioni, in coda di revisione |
+| Istituzionale | ogni lunedì | atti e comunicati, per l'assistente Omni-AI |
+
+Bandi e istituzionale sono arrivati qui il 2026-08-04, dal repo privato. Non per
+i minuti — insieme ne facevano una trentina al mese — ma perché i parser
+vivevano in due posti: due copie da tenere allineate, e due posti dove guardare
+quando qualcosa si rompe. L'ingestione istituzionale è rimasta rotta tre
+settimane senza che nessuno se ne accorgesse.
 
 ## Perché questo repo è pubblico, e l'app no
 
@@ -25,16 +38,24 @@ protetti — non finiscono nei log, i fork non li ricevono — ma è una superfi
 d'errore troppo larga per una chiave che apre ogni porta.
 
 Al suo posto c'è un `INGEST_TOKEN` che parla con una Edge Function, il **ponte**,
-che sa fare tre cose e nient'altro:
+che sa fare quattro cose e nient'altro:
 
 | Azione | Cosa fa |
 |---|---|
 | `fonti` | restituisce le Fonti attive da leggere |
-| `righe` | upsert su `notizia` e `evento` — solo quelle due tabelle |
+| `righe` | upsert su `notizia`, `evento`, `documento_istituzionale` — solo quelle |
+| `bandi` | la RPC che mette i bandi in coda di revisione, quella sola |
 | `esito` | scrive una riga di diagnostica nel registro |
 
-Se il token trapela, il danno è «ci inseriscono notizie finte»: brutto,
-riparabile, circoscritto. Non è «il database è di chiunque».
+Le azioni sono **nominate**: non esiste un'azione `rpc` con il nome della
+funzione a parametro, né una tabella scelta liberamente dal chiamante. Sarebbe
+di nuovo la chiave del database, con un passaggio in più.
+
+Se il token trapela, il danno è «ci inseriscono contenuti finti»: brutto,
+riparabile, circoscritto. Non è «il database è di chiunque». Con una avvertenza:
+`documento_istituzionale` è ciò che l'assistente cita al cittadino come fonte
+ufficiale, quindi lì ruotare il token non basta — va guardato anche cosa c'è
+finito dentro.
 
 ## Come gira
 
@@ -51,6 +72,13 @@ dart run bin/ingest.dart --formato rss --tipo notizia --fonte 3 \
 
 # Tutte le Fonti attive, come fa il cron
 bash tool/ingest_all.sh
+
+# Bandi di gov.sm: dry-run leggibile, poi la coda di revisione
+dart run bin/bandi.dart --limit 5
+dart run bin/bandi.dart --limit 30 --push
+
+# Atti e comunicati per Omni-AI (crawl indice → pagine di dettaglio)
+bash tool/ingest_istituzionale.sh
 ```
 
 **Aggiungere una testata non si fa qui:** è una riga nella tabella `fonte`, con
@@ -71,10 +99,15 @@ prolifica scorre via in poche ore.
 
 ## Una nota per chi tocca il codice
 
-`lib/dedup_service.dart` e i parser sono **copie** di file che vivono anche nel
-repo dell'app. La `dedup_key` che si genera qui è un contratto col vincolo unique
-sulla tabella: se cambia la normalizzazione del titolo qui e non là, ricompaiono
-i doppioni. Chi modifica la normalizzazione deve toccare tutt'e due.
+`lib/dedup_service.dart`, i parser del feed e quelli dei bandi sono **copie** di
+file che vivono anche nel repo dell'app, dove i workflow gemelli restano
+lanciabili a mano come rete di sicurezza. La `dedup_key` che si genera qui è un
+contratto col vincolo unique sulla tabella: se cambia la normalizzazione del
+titolo qui e non là, ricompaiono i doppioni. Chi modifica la normalizzazione deve
+toccare tutt'e due.
+
+Questo repo è la copia **operativa**: è quella che gira ogni giorno. Se le due
+divergono, ha ragione questa.
 
 ## Licenza
 

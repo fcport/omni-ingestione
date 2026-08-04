@@ -1,0 +1,47 @@
+name: Ingestione bandi pubblici
+
+# Riempie la coda di revisione dei Bandi pubblici da gov.sm.
+#
+# GIORNALIERO, non settimanale: la PA pubblica ~1,8 bandi al mese, ma la
+# finestra per candidarsi ha una mediana di 33 giorni e un MINIMO di 5, con 11
+# bandi su 76 sotto i 20. Con un giro settimanale un bando pubblicato il
+# martedì si vedrebbe a termini già chiusi — e il costo dell'errore lo paga il
+# cittadino, che l'occasione l'ha persa senza saperlo.
+#
+# NON pubblica: i bandi entrano `in_revisione` e restano invisibili finché un
+# umano non li approva dal backoffice. Se gov.sm cambia impaginazione il parser
+# degrada in silenzio, e la revisione è l'unico punto in cui ce ne accorgiamo
+# prima del cittadino.
+#
+# L'import è idempotente sull'URL: girare ogni notte su una pagina che cambia
+# due volte al mese non duplica nulla e non tocca lo stato di ciò che è già
+# stato valutato.
+#
+# 03:17 e non 03:00: il minuto zero è il più affollato della coda di GitHub e i
+# job schedulati lì vengono ritardati o saltati — vale qui come per il feed.
+on:
+  schedule:
+    - cron: '17 3 * * *'
+  workflow_dispatch:
+
+concurrency:
+  group: ingest-bandi
+  cancel-in-progress: true
+
+jobs:
+  ingest-bandi:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dart-lang/setup-dart@v1
+        with:
+          sdk: stable
+      - run: dart pub get
+      - name: Import bandi in coda di revisione
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          INGEST_TOKEN: ${{ secrets.INGEST_TOKEN }}
+        # 30 e non 10: la pagina espone ~78 bandi in ordine di pubblicazione, e
+        # un margine ampio copre il caso in cui la PA ne pubblichi diversi
+        # insieme dopo un fermo del job.
+        run: dart run bin/bandi.dart --limit 30 --push
