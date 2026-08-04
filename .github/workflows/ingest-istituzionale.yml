@@ -1,0 +1,41 @@
+name: Ingestione istituzionale
+
+# Popola `documento_istituzionale` dalle Fonti istituzionali: è la base di
+# conoscenza che Omni-AI cita al cittadino quando gli si chiede di un atto o di
+# un comunicato.
+#
+# SETTIMANALE (lunedì 04:23 UTC): gli atti cambiano lentamente e ogni Fonte
+# richiede di crawlare le pagine di dettaglio una per una — cadenza e costo non
+# hanno niente a che vedere col feed orario.
+#
+# ⚠️ QUESTO JOB È GIÀ MORTO IN SILENZIO UNA VOLTA. Dal 13 luglio al 4 agosto
+# 2026 è fallito ogni settimana: l'indice del Congresso di Stato rispondeva 404
+# (pagina spostata), lo script girava sotto `set -e` senza tolleranza per Fonte,
+# e moriva prima ancora di provare il Consiglio Grande e Generale. Risultato:
+# `documento_istituzionale` a zero righe per tre settimane, con l'assistente che
+# non aveva nulla da citare. Ora ogni Fonte lascia una riga in
+# `ingestione_esito` (tipo='istituzionale') anche quando fallisce, e una Fonte
+# rotta non ferma le altre.
+on:
+  schedule:
+    - cron: '23 4 * * 1'
+  workflow_dispatch:
+
+concurrency:
+  group: ingest-istituzionale
+  cancel-in-progress: true
+
+jobs:
+  ingest-istituzionale:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dart-lang/setup-dart@v1
+        with:
+          sdk: stable
+      - run: dart pub get
+      - name: Ingestione istituzionale
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          INGEST_TOKEN: ${{ secrets.INGEST_TOKEN }}
+        run: bash tool/ingest_istituzionale.sh

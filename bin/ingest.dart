@@ -1,5 +1,6 @@
 // Runner dell'ingestione Omni: legge una Fonte, normalizza, deduplica e
-// consegna le righe all'app attraverso il **ponte**.
+// consegna le righe all'app attraverso il **ponte** (`lib/ponte.dart`, che è
+// anche il posto dove è spiegato perché il ponte esiste).
 //
 // Uso (dry-run su una fixture, nessuna scrittura):
 //   dart run bin/ingest.dart --formato rss --tipo notizia --fonte 1 \
@@ -9,25 +10,34 @@
 //   SUPABASE_URL   (l'host del progetto, non un segreto)
 //   INGEST_TOKEN   (il segreto: autorizza il ponte, e nient'altro)
 //
-// PERCHÉ IL PONTE E NON IL DATABASE. Questo repo è pubblico — è il motivo per
-// cui esiste: su repo pubblico le GitHub Actions sono illimitate, e a luglio
-// 2026 l'ingestione è rimasta ferma undici giorni perché i minuti del piano
-// privato erano esauriti. Un repo pubblico però non può custodire la service
-// role key di Supabase, che bypassa RLS e apre l'intero database. Il token qui
-// dentro sa fare tre cose: chiedere le Fonti attive, consegnare righe di
-// Notizie/Eventi, scrivere una riga di diagnostica. Nessuna quarta.
+// Canale ISTITUZIONALE (la base di conoscenza che Omni-AI cita al cittadino):
+// crawl della pagina-indice → segue i link di dettaglio → estrae il full-text →
+// upsert in `documento_istituzionale`. Struttura e tabella diverse dai feed,
+// quindi percorso separato:
+//   dart run bin/ingest.dart --formato html --tipo istituzionale --fonte 8 \
+//     --url https://host/indice \
+//     --selettori '{"link":"a.atto","titolo":"h1","testo":"article","max":20}' --push
 
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:html/dom.dart';
+import 'package:html/parser.dart' as html;
 import 'package:http/http.dart' as http;
 import 'package:omni_ingestione/documento_grezzo.dart';
 import 'package:omni_ingestione/html_extractor.dart';
 import 'package:omni_ingestione/normalizzatore.dart';
+import 'package:omni_ingestione/parser_data.dart';
+import 'package:omni_ingestione/ponte.dart';
 import 'package:omni_ingestione/rss_parser.dart';
 
 Future<void> main(List<String> argv) async {
   final args = _Args.parse(argv);
+
+  if (args.tipo == 'istituzionale') {
+    await _ingestIstituzionale(args);
+    return;
+  }
 
   final String grezzo;
   try {
@@ -116,6 +126,173 @@ Future<String> _fetchUrl(String url) async {
   return resp.body;
 }
 
+/// Crawl istituzionale: pagina-indice → link di dettaglio → full-text.
+///
+/// Bounded a `selettori.max` voci (atti recenti, niente archivio storico). I
+/// selettori vengono dalla `config` della Fonte; il runner è tollerante: salta
+/// le voci senza titolo/corpo invece di fallire l'intero job.
+///
+/// A differenza della versione che stava nel repo privato, questa **lascia
+/// sempre una traccia in `ingestione_esito`**. Non è un dettaglio: l'ingestione
+/// istituzionale è rimasta rotta dal 13 luglio al 4 agosto 2026 (404 sull'indice
+/// del Congresso di Stato) e nessuno se n'è accorto, perché l'unico segnale era
+/// un run rosso su GitHub e `documento_istituzionale` vuota non fa rumore.
+Future<void> _ingestIstituzionale(_Args args) async {
+  final sel = args.selettori;
+  if (sel == null) {
+    _errore('--tipo istituzionale richiede --selettori <json>', 64);
+  }
+  final linkSel = sel['link'] as String?;
+  if (linkSel == null) _errore('selettori.link mancante', 64);
+
+  final String indiceHtml;
+  try {
+    indiceHtml = await _leggiSorgente(args);
+  } catch (e) {
+    await _registraEsito(args, esito: 'errore', errore: '$e');
+    _errore('$e', 1);
+  }
+
+  final base = Uri.tryParse(args.base ?? args.url ?? '');
+  final indice = html.parse(indiceHtml);
+
+  // Link di dettaglio unici, nell'ordine di pagina, cappati a `max`.
+  final max = (sel['max'] as num?)?.toInt() ?? 20;
+  final visti = <String>{};
+  final urls = <String>[];
+  for (final a in indice.querySelectorAll(linkSel)) {
+    final href = a.attributes['href']?.trim();
+    if (href == null || href.isEmpty) continue;
+    final assoluto = _assoluto(href, base);
+    if (assoluto == null || !visti.add(assoluto)) continue;
+    urls.add(assoluto);
+    if (urls.length >= max) break;
+  }
+
+  final righe = <Map<String, dynamic>>[];
+  for (final url in urls) {
+    try {
+      final pagina = html.parse(await _fetchUrl(url));
+      final titolo =
+          _testoDi(pagina.documentElement, sel['titolo'] as String?) ??
+          _testoDi(pagina.documentElement, 'h1') ??
+          _testoDi(pagina.documentElement, 'title');
+      final contenuto = _corpo(pagina, sel['testo'] as String?);
+      if (titolo == null || contenuto == null || contenuto.length < 40) {
+        stderr.writeln('  (salto: titolo/corpo non estratto) $url');
+        continue;
+      }
+      final dataTesto = _testoDi(pagina.documentElement, sel['data'] as String?);
+      final data = dataTesto == null ? null : parseData(dataTesto);
+      righe.add({
+        'fonte_id': args.fonte,
+        'titolo': titolo,
+        'url': url,
+        'tipo_atto': sel['tipo_atto'] as String?,
+        'data': data?.toUtc().toIso8601String(),
+        // Cap di sicurezza: lo snippet a query time lo fa ts_headline.
+        'contenuto': contenuto.length > 8000
+            ? contenuto.substring(0, 8000)
+            : contenuto,
+        'dedup_key': url,
+      });
+    } catch (e) {
+      stderr.writeln('  (errore su $url: $e)');
+    }
+  }
+
+  if (!args.push) {
+    stdout.writeln(const JsonEncoder.withIndent('  ').convert(righe));
+    stderr.writeln(
+      '[dry-run] ${righe.length} documenti da ${urls.length} link '
+      '(nessuna scrittura).',
+    );
+    return;
+  }
+
+  // Zero righe da un indice che ha risposto 200 è un guasto silenzioso: la
+  // pagina esiste ma i selettori non pescano più niente. Va nel registro come
+  // errore, non come giro riuscito con zero risultati.
+  if (righe.isEmpty) {
+    await _registraEsito(
+      args,
+      esito: 'errore',
+      documenti: urls.length,
+      righe: 0,
+      errore: urls.isEmpty
+          ? 'nessun link di dettaglio: selettore "$linkSel" non pesca più'
+          : 'nessun documento estratto da ${urls.length} link',
+    );
+    _errore(
+      'Nessun documento estratto da ${urls.length} link: '
+      'la Fonte ha cambiato struttura?',
+      1,
+    );
+  }
+
+  final Map<String, dynamic> scritto;
+  try {
+    scritto = await _consegna('documento_istituzionale', righe);
+  } catch (e) {
+    await _registraEsito(
+      args,
+      esito: 'errore',
+      documenti: urls.length,
+      righe: righe.length,
+      errore: '$e',
+    );
+    _errore('$e', 1);
+  }
+
+  final nuove = scritto['nuove'] as int?;
+  await _registraEsito(
+    args,
+    esito: 'ok',
+    documenti: urls.length,
+    righe: righe.length,
+    nuove: nuove,
+  );
+  stderr.writeln(
+    'Consegnati ${righe.length} documenti istituzionali '
+    '(${nuove ?? '?'} nuovi, da ${urls.length} link).',
+  );
+}
+
+String? _assoluto(String raw, Uri? base) {
+  final u = Uri.tryParse(raw);
+  if (u == null) return null;
+  if (u.hasScheme) return raw;
+  if (base == null) return null;
+  return base.resolveUri(u).toString();
+}
+
+/// Testo di un elemento individuato da [selettore] (lista CSS ammessa); null se
+/// assente o vuoto.
+String? _testoDi(Element? radice, String? selettore) {
+  if (radice == null || selettore == null) return null;
+  final el = radice.querySelector(selettore);
+  final t = el?.text.trim();
+  return (t == null || t.isEmpty) ? null : _comprimi(t);
+}
+
+/// Corpo dell'atto: l'elemento [selettore] se c'è, altrimenti i paragrafi di
+/// main/article/body come fallback.
+String? _corpo(Document doc, String? selettore) {
+  final mirato = _testoDi(doc.documentElement, selettore);
+  if (mirato != null && mirato.length >= 40) return mirato;
+  final contenitore =
+      doc.querySelector('main') ?? doc.querySelector('article') ?? doc.body;
+  if (contenitore == null) return null;
+  final paragrafi = contenitore
+      .querySelectorAll('p')
+      .map((p) => p.text.trim())
+      .where((t) => t.isNotEmpty);
+  final testo = _comprimi(paragrafi.join('\n'));
+  return testo.isEmpty ? null : testo;
+}
+
+String _comprimi(String s) => s.replaceAll(RegExp(r'[ \t]+'), ' ').trim();
+
 /// L'unico punto in cui questo repo scrive qualcosa. Il ponte risponde con
 /// quante righe erano davvero nuove: il numero che dice se fra un giro e l'altro
 /// il feed si è rinnovato per intero — cioè se stiamo perdendo notizie.
@@ -124,7 +301,7 @@ Future<Map<String, dynamic>> _consegna(
   List<Map<String, dynamic>> righe,
 ) async {
   if (righe.isEmpty) return {'scritte': 0, 'nuove': 0};
-  final resp = await _ponte({
+  final resp = await ponte({
     'azione': 'righe',
     'tabella': tabella,
     'righe': righe,
@@ -148,7 +325,7 @@ Future<void> _registraEsito(
 }) async {
   if (!args.push) return; // dry-run: non si sporca il registro
   try {
-    await _ponte({
+    await ponte({
       'azione': 'esito',
       'fonte_id': args.fonte,
       'tipo': args.tipo,
@@ -163,20 +340,6 @@ Future<void> _registraEsito(
   } catch (_) {
     // Il registro è diagnostica, non produzione.
   }
-}
-
-Future<http.Response?> _ponte(Map<String, dynamic> corpo) async {
-  final url = Platform.environment['SUPABASE_URL'];
-  final token = Platform.environment['INGEST_TOKEN'];
-  if (url == null || token == null) return null;
-  return http.post(
-    Uri.parse('$url/functions/v1/ingestione-ponte'),
-    headers: {
-      'Authorization': 'Bearer $token',
-      'Content-Type': 'application/json',
-    },
-    body: jsonEncode(corpo),
-  );
 }
 
 Never _errore(String messaggio, int codice) {
@@ -221,11 +384,14 @@ class _Args {
     if (formato != 'rss' && formato != 'html') {
       _errore('--formato deve essere rss|html', 64);
     }
-    // Niente `istituzionale` qui: quel canale scrive su
-    // `documento_istituzionale`, che il ponte non ammette, e resta nel repo
-    // privato dove ha la service role key.
-    if (tipo != 'notizia' && tipo != 'evento') {
-      _errore('--tipo deve essere notizia|evento', 64);
+    if (tipo != 'notizia' && tipo != 'evento' && tipo != 'istituzionale') {
+      _errore('--tipo deve essere notizia|evento|istituzionale', 64);
+    }
+    // Il canale istituzionale crawla una pagina-indice: da un RSS non ci sono
+    // link di dettaglio da seguire, e il flag passerebbe silenziosamente per poi
+    // non estrarre nulla.
+    if (tipo == 'istituzionale' && formato != 'html') {
+      _errore('--tipo istituzionale richiede --formato html', 64);
     }
     return _Args(
       formato: formato!,
