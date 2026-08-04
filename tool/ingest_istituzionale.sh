@@ -43,12 +43,19 @@ echo "$fonti" \
   fnome="$(echo "$f" | jq -r '.nome')"
   furl="$(echo "$f" | jq -r '.config.url')"
   fsel="$(echo "$f" | jq -c '.config.selettori')"
+  fbase="$(echo "$f" | jq -r '.config.base // empty')"
   if [ -z "$furl" ] || [ "$furl" = "null" ]; then
     echo "  (salto $fnome: manca config.url)"; continue
   fi
   echo "→ $fnome (fonte $fid) — istituzionale"
+  # `config.base` è opzionale e serve quando i link di dettaglio sono relativi a
+  # una cartella diversa da quella dell'indice. Sul Consiglio Grande e Generale
+  # l'indice è `/on-line/home.html` e i link sono `articoloNNNN.html`: risolti
+  # contro l'indice diventano `/on-line/articoloNNNN.html`, che il CMS serve con
+  # **200 e il contenuto della home** invece di un 404. Il crawl "riesce" e
+  # ingerisce la pagina sbagliata — il tipo di guasto che non si vede.
   dart run bin/ingest.dart --formato html --tipo istituzionale --fonte "$fid" \
-    --url "$furl" --selettori "$fsel" --push \
+    --url "$furl" ${fbase:+--base "$fbase"} --selettori "$fsel" --push \
     || echo "  ⚠ $fnome: ingestione fallita, continuo"
 done
 
