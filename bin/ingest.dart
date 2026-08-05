@@ -82,6 +82,27 @@ Future<void> main(List<String> argv) async {
         )
       : normalizzatore.eventi(documenti, fonteId: args.fonte);
 
+  // Una sorgente che risponde 200 ma non produce righe non è un giro riuscito
+  // con zero risultati: è un guasto silenzioso. Vale per il feed svuotato
+  // dall'editore (San Marino Notizie ha consegnato «0 righe su 0» a ogni giro
+  // per giorni, con il job verde) e per la pagina che ha cambiato struttura
+  // sotto i selettori. Stesso trattamento che il canale istituzionale riserva
+  // all'indice che non pesca più niente.
+  if (righe.isEmpty) {
+    final motivo = documenti.isEmpty
+        ? 'nessun documento nella sorgente: feed vuoto o formato cambiato?'
+        : 'nessuna riga normalizzata da ${documenti.length} documenti: '
+              'la Fonte ha cambiato struttura?';
+    await _registraEsito(
+      args,
+      esito: 'errore',
+      documenti: documenti.length,
+      righe: 0,
+      errore: motivo,
+    );
+    _errore(motivo, 1);
+  }
+
   if (!args.push) {
     stdout.writeln(const JsonEncoder.withIndent('  ').convert(righe));
     stderr.writeln(
