@@ -17,18 +17,27 @@ name: Ingestione feed
 #
 # Niente Flutter: è un progetto Dart puro, l'SDK si tira su in pochi secondi.
 
-# MINUTO :37, NON :00. GitHub mette in coda i job schedulati e nei picchi di
-# carico li ritarda o li **salta**: il minuto zero di ogni ora è il momento più
-# affollato del pianeta, e ci si è visto subito. Il 2026-08-02 il giro delle
-# 20:00 non è mai partito, quello delle 21:00 è arrivato con due minuti di
-# ritardo, e i giri delle 05:00 e 06:00 del giorno dopo sono spariti: dieci ore
-# senza ingestione al primo giorno di esercizio. Un minuto spostato non dà
-# garanzie — la schedulazione resta best-effort — ma toglie di mezzo la coda
-# peggiore. Il guardiano su Supabase resta la rete: se il feed tace più di
-# quattro ore in fascia diurna, lo dice.
+# L'OROLOGIO NON È PIÙ QUESTO. Dal 2026-08-03 a scandire l'ingestione è pg_cron
+# su Supabase (`innesca_ingestione`, al minuto :05), che lancia il workflow via
+# `workflow_dispatch`: i lanci su richiesta partono subito, i job schedulati no.
+# La schedulazione di GitHub è best-effort e lo dice la documentazione — dei
+# quattro giri previsti fra le 07:37 e le 10:37 del 2026-08-03 ne era partito
+# **uno solo**, con 19 minuti di ritardo.
+#
+# QUESTO CRON È LA RISERVA, E VA TENUTA RADA (2026-08-05). Quando l'orologio si
+# è spostato su Supabase, questo `schedule` orario è rimasto acceso: due giri
+# ogni ora invece di uno, il doppio delle richieste alle testate. Il giorno dopo
+# Libertas e RTV hanno iniziato a rispondere 403 ai runner — e la migrazione che
+# ha spostato l'orologio lo aveva già scritto, che ogni giro in più è una
+# richiesta in più a chi risponde 403 quando gli si bussa troppo spesso.
+#
+# Quattro giri al giorno bastano a coprire il caso «Supabase ha smesso di
+# innescare» senza raddoppiare il traffico: il buco massimo diventa quattro ore,
+# che è la stessa soglia oltre la quale il guardiano su Supabase notifica gli
+# admin. Se l'innesco si rompe, lo si sa da lì — non da questo cron.
 on:
   schedule:
-    - cron: '37 5-21 * * *'
+    - cron: '37 6,10,14,18 * * *'
   workflow_dispatch:
 
 concurrency:
