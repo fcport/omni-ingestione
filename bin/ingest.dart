@@ -82,6 +82,27 @@ Future<void> main(List<String> argv) async {
         )
       : normalizzatore.eventi(documenti, fonteId: args.fonte);
 
+  // Una sorgente che risponde 200 ma non produce righe non è un giro riuscito
+  // con zero risultati: è un guasto silenzioso. Vale per il feed svuotato
+  // dall'editore (San Marino Notizie ha consegnato «0 righe su 0» a ogni giro
+  // per giorni, con il job verde) e per la pagina che ha cambiato struttura
+  // sotto i selettori. Stesso trattamento che il canale istituzionale riserva
+  // all'indice che non pesca più niente.
+  if (righe.isEmpty) {
+    final motivo = documenti.isEmpty
+        ? 'nessun documento nella sorgente: feed vuoto o formato cambiato?'
+        : 'nessuna riga normalizzata da ${documenti.length} documenti: '
+              'la Fonte ha cambiato struttura?';
+    await _registraEsito(
+      args,
+      esito: 'errore',
+      documenti: documenti.length,
+      righe: 0,
+      errore: motivo,
+    );
+    _errore(motivo, 1);
+  }
+
   if (!args.push) {
     stdout.writeln(const JsonEncoder.withIndent('  ').convert(righe));
     stderr.writeln(
@@ -115,13 +136,19 @@ Future<void> main(List<String> argv) async {
 
 Future<String> _leggiSorgente(_Args args) async {
   if (args.fixture != null) return File(args.fixture!).readAsStringSync();
-  if (args.url != null) return _fetchUrl(args.url!);
+  // Solo la sorgente principale può ripiegare sul ponte: è l'unico indirizzo
+  // che sta nella tabella `fonte`. I link di dettaglio del crawl istituzionale
+  // vanno per la loro strada (vedi `_fetchUrl`).
+  if (args.url != null) return _fetchUrl(args.url!, fonteDiRipiego: args.fonte);
   _errore('Serve --fixture <path> oppure --url <feed-url>', 64);
 }
 
 /// GET con header da browser: parecchie testate rispondono 403 allo User-Agent
 /// di default di Dart.
-Future<String> _fetchUrl(String url) async {
+///
+/// Con [fonteDiRipiego] valorizzato, un 403/429 non è la fine: si ritenta
+/// passando dal ponte, che scarica dall'IP di Supabase. Vedi `_dalPonte`.
+Future<String> _fetchUrl(String url, {int? fonteDiRipiego}) async {
   final resp = await http.get(
     Uri.parse(url),
     headers: const {
@@ -132,10 +159,53 @@ Future<String> _fetchUrl(String url) async {
           'application/rss+xml, application/xml, text/xml, text/html;q=0.9, */*;q=0.8',
     },
   );
-  if (resp.statusCode >= 300) {
-    throw StateError('Fetch fallito (${resp.statusCode}) da $url');
+  if (resp.statusCode < 300) return resp.body;
+
+  final bloccati = resp.statusCode == 403 || resp.statusCode == 429;
+  if (fonteDiRipiego != null && fonteDiRipiego > 0 && bloccati) {
+    stderr.writeln(
+      '  (${resp.statusCode} da $url: la testata rifiuta questo IP, '
+      'ritento dal ponte)',
+    );
+    return _dalPonte(fonteDiRipiego, url, resp.statusCode);
   }
-  return resp.body;
+  throw StateError('Fetch fallito (${resp.statusCode}) da $url');
+}
+
+/// Il ripiego: il feed lo scarica il ponte, dall'IP di Supabase.
+///
+/// Serve perché dal 5 agosto 2026 le testate hanno iniziato a rifiutare gli IP
+/// dei runner GitHub — le stesse URL, nello stesso momento, rispondono 200 a un
+/// IP domestico e 403 a noi. Non è un blocco contro Omni: è un blocco per
+/// provenienza, e i runner sono dalla parte sbagliata.
+///
+/// Si passa il `fonte_id`, non l'URL: l'indirizzo da scaricare lo rilegge il
+/// ponte dalla tabella `fonte`. Con l'URL a parametro sarebbe un proxy aperto a
+/// chiunque abbia il token.
+Future<String> _dalPonte(int fonteId, String url, int statoDiretto) async {
+  final resp = await ponte({'azione': 'sorgente', 'fonte_id': fonteId});
+  if (resp == null) {
+    throw StateError(
+      'Fetch fallito ($statoDiretto) da $url e niente ripiego: '
+      'ponte non configurato',
+    );
+  }
+  if (resp.statusCode >= 300) {
+    // Il messaggio tiene dentro **entrambi** gli esiti: sapere che la testata
+    // blocca anche il ponte è la differenza fra «cambiamo IP» e «con questa
+    // testata la strada tecnica è finita».
+    throw StateError(
+      'Fetch fallito ($statoDiretto) da $url, e anche dal ponte '
+      '(${resp.statusCode}): ${resp.body.split('\n').first}',
+    );
+  }
+  final corpo = jsonDecode(resp.body) as Map<String, dynamic>;
+  final contenuto = corpo['contenuto'];
+  if (contenuto is! String || contenuto.isEmpty) {
+    throw StateError('Il ponte ha risposto senza contenuto per la fonte $fonteId');
+  }
+  stderr.writeln('  (ripiego riuscito: ${contenuto.length} caratteri dal ponte)');
+  return contenuto;
 }
 
 /// Crawl istituzionale: pagina-indice → link di dettaglio → full-text.

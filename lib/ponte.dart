@@ -7,12 +7,15 @@
 // RLS e apre l'intero database: i dati dei cittadini, i voti della Piazza, le
 // chat del Mercatino.
 //
-// Al suo posto c'è un token che autorizza **quattro azioni nominate e nient'altro**
+// Al suo posto c'è un token che autorizza **cinque azioni nominate e nient'altro**
 // (Edge Function `ingestione-ponte`, nel repo privato):
-//   fonti  → l'elenco delle Fonti attive
-//   righe  → upsert su notizia | evento | documento_istituzionale
-//   bandi  → la RPC `importa_bandi_cron`, quella sola
-//   esito  → una riga di diagnostica in `ingestione_esito`
+//   fonti    → l'elenco delle Fonti attive
+//   righe    → upsert su notizia | evento | documento_istituzionale
+//   bandi    → la RPC `importa_bandi_cron`, quella sola
+//   esito    → una riga di diagnostica in `ingestione_esito`
+//   sorgente → scarica il feed di una Fonte attiva dall'IP di Supabase, quando
+//              la testata rifiuta gli IP dei runner (`fonte_id`, non un URL:
+//              l'indirizzo lo decide il database)
 //
 // Se il token trapela il danno è «ci inseriscono contenuti finti»: brutto,
 // riparabile, circoscritto. Non è «il database dei cittadini è di chiunque».

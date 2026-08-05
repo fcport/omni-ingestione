@@ -36,9 +36,14 @@ fi
 # 2026 l'indice del Congresso di Stato rispondeva 404, il job moriva sulla prima
 # Fonte e il Consiglio Grande e Generale non veniva nemmeno provato. Tre
 # settimane di ingestione istituzionale a zero per una sola pagina spostata.
-echo "$fonti" \
-| jq -c '.fonti[] | select(.config.tipo=="istituzionale" and .config.formato=="html")' \
-| while read -r f; do
+#
+# Fallire una Fonte non ferma le altre, ma il giro chiude ROSSO: un job verde
+# con dentro un 404 è esattamente il modo in cui le tre settimane qui sopra sono
+# passate inosservate. (Il `< <(...)` invece della pipeline serve a non perdere
+# l'array in una subshell.)
+ko=()
+
+while read -r f; do
   fid="$(echo "$f" | jq -r '.id')"
   fnome="$(echo "$f" | jq -r '.nome')"
   furl="$(echo "$f" | jq -r '.config.url')"
@@ -54,10 +59,33 @@ echo "$fonti" \
   # contro l'indice diventano `/on-line/articoloNNNN.html`, che il CMS serve con
   # **200 e il contenuto della home** invece di un 404. Il crawl "riesce" e
   # ingerisce la pagina sbagliata — il tipo di guasto che non si vede.
-  dart run bin/ingest.dart --formato html --tipo istituzionale --fonte "$fid" \
-    --url "$furl" ${fbase:+--base "$fbase"} --selettori "$fsel" --push \
-    || echo "  ⚠ $fnome: ingestione fallita, continuo"
-done
+  if ! dart run bin/ingest.dart --formato html --tipo istituzionale --fonte "$fid" \
+    --url "$furl" ${fbase:+--base "$fbase"} --selettori "$fsel" --push; then
+    echo "  ⚠ $fnome: ingestione fallita, continuo"
+    ko+=("$fnome")
+  fi
+done < <(echo "$fonti" \
+  | jq -c '.fonti[] | select(.config.tipo=="istituzionale" and .config.formato=="html")')
 
-echo "✓ Ingestione istituzionale completata."
-echo "  (gli errori per Fonte sono nel registro \`ingestione_esito\`, tipo='istituzionale')"
+if [ "${#ko[@]}" -eq 0 ]; then
+  echo "✓ Ingestione istituzionale completata: tutte le Fonti hanno consegnato."
+  exit 0
+fi
+
+echo
+if [ "${#ko[@]}" -eq 1 ]; then
+  echo "✗ Ingestione istituzionale completata, ma una Fonte non ha consegnato:"
+else
+  echo "✗ Ingestione istituzionale completata, ma ${#ko[@]} Fonti non hanno consegnato:"
+fi
+for nome in "${ko[@]}"; do echo "   · $nome"; done
+echo "  (il dettaglio è nel registro \`ingestione_esito\`, tipo='istituzionale')"
+
+if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
+  {
+    echo "### Fonti istituzionali che non hanno consegnato (${#ko[@]})"
+    for nome in "${ko[@]}"; do echo "- $nome"; done
+  } >> "$GITHUB_STEP_SUMMARY"
+fi
+
+exit 1
