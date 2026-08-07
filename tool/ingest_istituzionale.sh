@@ -3,8 +3,11 @@
 # crawlando le pagine-indice configurate in `fonte` (config.tipo='istituzionale').
 # È la base di conoscenza che Omni-AI cita al cittadino.
 #
-# Separata dal feed Notizie/Eventi: gira SETTIMANALMENTE, non ogni ora — gli atti
-# cambiano lentamente e le pagine di dettaglio si crawlano una per una.
+# Separata dal feed Notizie/Eventi: gira UNA VOLTA AL GIORNO (02:43 UTC), non
+# ogni ora — le pagine di dettaglio si crawlano una per una. Era settimanale
+# fino al 7 agosto 2026: troppo poco, perché l'indice espone solo i primi
+# `config.max` link e quello che scorre oltre in una settimana non lo vediamo
+# mai. La motivazione per esteso sta in `.github/workflows/ingest-istituzionale.yml`.
 #
 # Come `ingest_all.sh`, l'elenco delle Fonti NON è cablato qui: lo chiede al
 # ponte. Aggiungerne una resta una riga nella tabella `fonte`.

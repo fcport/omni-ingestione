@@ -4,9 +4,22 @@ name: Ingestione istituzionale
 # conoscenza che Omni-AI cita al cittadino quando gli si chiede di un atto o di
 # un comunicato.
 #
-# SETTIMANALE (lunedì 04:23 UTC): gli atti cambiano lentamente e ogni Fonte
-# richiede di crawlare le pagine di dettaglio una per una — cadenza e costo non
-# hanno niente a che vedere col feed orario.
+# GIORNALIERO (02:43 UTC). Era settimanale, con la motivazione che gli atti
+# cambiano lentamente: vera per il singolo atto, sbagliata per l'indice. Il
+# selettore prende al massimo `config.max` link (40 sugli Atti normativi) dalla
+# prima pagina, e la finestra non aspetta noi: se in una settimana il Congresso
+# ne pubblica più di 40, quelli in fondo escono dall'indice e non entrano MAI —
+# nessun errore, nessuna riga rossa, solo un buco nella base di conoscenza che
+# Omni-AI cita. Il giro costa 3m36s e ~43 richieste a gov.sm: girare ogni notte
+# ne fa meno di quante il feed ne fa alle testate in un'ora.
+#
+# Resta lontano dal feed orario (fascia 05:05-21:05) e dai Bandi (03:17): i cron
+# di GitHub slittano anche di un'ora, e 02:43 lascia margine a tutti. Mai il
+# minuto :00, che è il più affollato della coda e viene saltato nei picchi.
+#
+# L'ingestione è idempotente sull'URL (`dedup_key`), quindi ri-crawlare ogni
+# notte le stesse pagine non duplica niente: le pagine di dettaglio si
+# ri-scaricano comunque tutte, il dedup è a valle.
 #
 # ⚠️ QUESTO JOB È GIÀ MORTO IN SILENZIO UNA VOLTA. Dal 13 luglio al 4 agosto
 # 2026 è fallito ogni settimana: l'indice del Congresso di Stato rispondeva 404
@@ -18,7 +31,7 @@ name: Ingestione istituzionale
 # rotta non ferma le altre.
 on:
   schedule:
-    - cron: '23 4 * * 1'
+    - cron: '43 2 * * *'
   workflow_dispatch:
 
 concurrency:
