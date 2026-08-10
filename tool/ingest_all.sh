@@ -77,6 +77,39 @@ while read -r f; do
 done < <(echo "$fonti" \
   | jq -c '.fonti[] | select(.config.tipo=="evento" and .config.formato=="html")')
 
+# Eventi da API REST (WordPress + campi ACF): niente selettori, il formato è già
+# strutturato. Vedi `WpEventiParser`.
+#
+# `config.ore_utc` — se c'è, la Fonte gira SOLO a quelle ore. Le altre sorgenti
+# eventi sono una pagina sola; questa è un catalogo di oltre mille Eventi, cioè
+# tredici richieste a giro, e a ritmo orario farebbero trecento richieste al
+# giorno al server di qualcun altro per un calendario turistico che cambia una
+# volta al giorno. Non è un limite tecnico: è non abusare di un ospite. Senza il
+# campo la Fonte gira a ogni giro, come le altre.
+ora_utc="$(date -u +%-H)"
+while read -r f; do
+  fid="$(echo "$f" | jq -r '.id')"
+  fnome="$(echo "$f" | jq -r '.nome')"
+  furl="$(echo "$f" | jq -r '.config.url')"
+  fgiorni="$(echo "$f" | jq -r '.config.giorni_avanti // 30')"
+  fore="$(echo "$f" | jq -c '.config.ore_utc // empty')"
+  if [ -z "$furl" ] || [ "$furl" = "null" ]; then
+    echo "  (salto $fnome: manca config.url)"; continue
+  fi
+  if [ -n "$fore" ] \
+     && ! echo "$fore" | jq -e --argjson h "$ora_utc" 'index($h)' >/dev/null; then
+    echo "  (salto $fnome: gira alle ore $fore UTC, adesso sono le $ora_utc)"
+    continue
+  fi
+  echo "→ $fnome (fonte $fid) — eventi API JSON"
+  if ! dart run bin/ingest.dart --formato json --tipo evento --fonte "$fid" \
+    --url "$furl" --giorni-avanti "$fgiorni" --push; then
+    echo "  ⚠ $fnome: ingestione fallita, continuo"
+    ko+=("$fnome")
+  fi
+done < <(echo "$fonti" \
+  | jq -c '.fonti[] | select(.config.tipo=="evento" and .config.formato=="json")')
+
 if [ "${#ko[@]}" -eq 0 ]; then
   echo "✓ Ingestione completata: tutte le Fonti hanno consegnato."
   exit 0

@@ -42,6 +42,7 @@ import 'package:omni_ingestione/normalizzatore.dart';
 import 'package:omni_ingestione/parser_data.dart';
 import 'package:omni_ingestione/ponte.dart';
 import 'package:omni_ingestione/rss_parser.dart';
+import 'package:omni_ingestione/wp_eventi_parser.dart';
 
 Future<void> main(List<String> argv) async {
   final args = _Args.parse(argv);
@@ -51,25 +52,36 @@ Future<void> main(List<String> argv) async {
     return;
   }
 
-  final String grezzo;
-  try {
-    grezzo = await _leggiSorgente(args);
-  } catch (e) {
-    await _registraEsito(args, esito: 'errore', errore: '$e');
-    _errore('$e', 1);
-  }
-
   final List<DocumentoGrezzo> documenti;
-  if (args.formato == 'rss') {
-    documenti = const RssParser().parse(grezzo);
+  if (args.formato == 'json') {
+    try {
+      documenti = await _eventiDaWordpress(args);
+    } catch (e) {
+      await _registraEsito(args, esito: 'errore', errore: '$e');
+      _errore('$e', 1);
+    }
   } else {
-    final sel = args.selettori;
-    if (sel == null) _errore('--formato html richiede --selettori <json>', 64);
-    documenti = const HtmlExtractor().estrai(
-      grezzo,
-      SelettoriHtml.fromMap(sel),
-      baseUrl: args.base ?? args.url,
-    );
+    final String grezzo;
+    try {
+      grezzo = await _leggiSorgente(args);
+    } catch (e) {
+      await _registraEsito(args, esito: 'errore', errore: '$e');
+      _errore('$e', 1);
+    }
+
+    if (args.formato == 'rss') {
+      documenti = const RssParser().parse(grezzo);
+    } else {
+      final sel = args.selettori;
+      if (sel == null) {
+        _errore('--formato html richiede --selettori <json>', 64);
+      }
+      documenti = const HtmlExtractor().estrai(
+        grezzo,
+        SelettoriHtml.fromMap(sel),
+        baseUrl: args.base ?? args.url,
+      );
+    }
   }
 
   const normalizzatore = Normalizzatore();
@@ -133,6 +145,114 @@ Future<void> main(List<String> argv) async {
     '(${nuove ?? '?'} nuove su ${documenti.length} nel feed).',
   );
 }
+
+/// Il custom post type `eventi` dell'API REST di WordPress, pagina per pagina.
+///
+/// **`_fields` non è un'ottimizzazione, è cortesia.** La risposta piena porta
+/// `content` e `yoast_head` e pesa dieci volte; questa Fonte ha più di mille
+/// Eventi, cioè tredici pagine a giro. Chiedendo solo i cinque campi che
+/// servono si scende da ~9 MB a ~900 KB — e stiamo leggendo il server di
+/// qualcun altro, gratis, a ripetizione.
+///
+/// Le locandine arrivano con **una sola chiamata in più**: `featured_media` è
+/// un id, non un URL, e `_embed` gonfierebbe ogni pagina di dieci volte per
+/// prendere lo stesso dato. Si raccolgono gli id degli Eventi tenuti e si
+/// chiede `/media?include=…` in blocco.
+Future<List<DocumentoGrezzo>> _eventiDaWordpress(_Args args) async {
+  if (args.fixture != null) {
+    return WpEventiParser(giorniAvanti: args.giorniAvanti).parse(
+      jsonDecode(File(args.fixture!).readAsStringSync()) as List<dynamic>,
+      adesso: DateTime.now().toUtc(),
+    );
+  }
+
+  final base = args.url;
+  if (base == null) _errore('--formato json richiede --url <endpoint>', 64);
+
+  const perPagina = 100;
+  const maxPagine = 20; // rete di sicurezza: un `page` che non finisce mai.
+  final posts = <dynamic>[];
+  for (var pagina = 1; pagina <= maxPagine; pagina++) {
+    final url =
+        '$base?per_page=$perPagina&page=$pagina'
+        '&_fields=id,link,title,acf,featured_media';
+    // Una pagina oltre l'ultima risponde **400**, non 200 con lista vuota: è il
+    // modo in cui WordPress dice «finito», e trattarlo come errore farebbe
+    // fallire ogni giro completo.
+    final resp = await http.get(
+      Uri.parse(url),
+      headers: const {'User-Agent': _userAgent, 'Accept': 'application/json'},
+    );
+    if (resp.statusCode == 400 && pagina > 1) break;
+    if (resp.statusCode >= 300) {
+      throw StateError('Fetch fallito (${resp.statusCode}) da $url');
+    }
+    final lista = jsonDecode(resp.body);
+    if (lista is! List || lista.isEmpty) break;
+    posts.addAll(lista);
+    if (lista.length < perPagina) break;
+  }
+
+  final parser = WpEventiParser(giorniAvanti: args.giorniAvanti);
+  final senzaImmagini = parser.parse(posts, adesso: DateTime.now().toUtc());
+  if (senzaImmagini.isEmpty) return senzaImmagini;
+
+  // Solo i media degli Eventi che restano: sono le decine dentro l'orizzonte,
+  // non le migliaia del catalogo.
+  final tenuti = {
+    for (final p in posts.whereType<Map>())
+      if (senzaImmagini.any((d) => d.url == p['link']))
+        (p['featured_media'] as num?)?.toInt() ?? 0,
+  }..removeWhere((id) => id == 0);
+
+  final immagini = await _immaginiWordpress(base, tenuti);
+  if (immagini.isEmpty) return senzaImmagini;
+
+  return WpEventiParser(
+    giorniAvanti: args.giorniAvanti,
+    immagini: immagini,
+  ).parse(posts, adesso: DateTime.now().toUtc());
+}
+
+/// `featured_media` → URL, in blocchi da 100 (il tetto di `per_page`).
+///
+/// Le immagini sono un di più: se l'endpoint media risponde male si va avanti
+/// senza locandine, perché un Evento senza immagine è comunque un Evento,
+/// mentre un giro fallito per una foto non ha aiutato nessuno.
+Future<Map<int, String>> _immaginiWordpress(
+  String endpointEventi,
+  Set<int> ids,
+) async {
+  if (ids.isEmpty) return const {};
+  final media = endpointEventi.replaceFirst(RegExp(r'/[^/]+$'), '/media');
+  final risultato = <int, String>{};
+  final elenco = ids.toList();
+  for (var i = 0; i < elenco.length; i += 100) {
+    final blocco = elenco.sublist(i, i + 100 > elenco.length ? elenco.length : i + 100);
+    final url =
+        '$media?include=${blocco.join(',')}&per_page=100&_fields=id,source_url';
+    try {
+      final resp = await http.get(
+        Uri.parse(url),
+        headers: const {'User-Agent': _userAgent, 'Accept': 'application/json'},
+      );
+      if (resp.statusCode >= 300) continue;
+      for (final m in jsonDecode(resp.body) as List<dynamic>) {
+        if (m is! Map) continue;
+        final id = (m['id'] as num?)?.toInt();
+        final src = m['source_url'] as String?;
+        if (id != null && src != null && src.isNotEmpty) risultato[id] = src;
+      }
+    } catch (_) {
+      // Vedi sopra: le locandine non fanno cadere il giro.
+    }
+  }
+  return risultato;
+}
+
+const _userAgent =
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
+    '(KHTML, like Gecko) Chrome/124.0 Safari/537.36';
 
 Future<String> _leggiSorgente(_Args args) async {
   if (args.fixture != null) return File(args.fixture!).readAsStringSync();
@@ -439,9 +559,10 @@ class _Args {
     this.base,
     this.selettori,
     this.push = false,
+    this.giorniAvanti = 30,
   });
 
-  final String formato; // rss | html
+  final String formato; // rss | html | json
   final String tipo; // notizia | evento
   final int fonte;
   final String? fixture;
@@ -449,6 +570,9 @@ class _Args {
   final String? base; // base per risolvere URL relativi (default: url)
   final Map<String, dynamic>? selettori;
   final bool push;
+
+  /// Solo `--formato json`: quanti giorni avanti tenere le occorrenze.
+  final int giorniAvanti;
 
   static _Args parse(List<String> argv) {
     final m = <String, String>{};
@@ -463,11 +587,18 @@ class _Args {
     }
     final formato = m['formato'];
     final tipo = m['tipo'];
-    if (formato != 'rss' && formato != 'html') {
-      _errore('--formato deve essere rss|html', 64);
+    if (formato != 'rss' && formato != 'html' && formato != 'json') {
+      _errore('--formato deve essere rss|html|json', 64);
     }
     if (tipo != 'notizia' && tipo != 'evento' && tipo != 'istituzionale') {
       _errore('--tipo deve essere notizia|evento|istituzionale', 64);
+    }
+    // `json` legge l'API REST di WordPress, che espone gli Eventi come custom
+    // post type. Per le Notizie non esiste il caso, e lasciarlo passare
+    // vorrebbe dire un'ingestione che gira e non scrive niente — in silenzio,
+    // come la combinazione notizia+html che nessuno filtrava.
+    if (formato == 'json' && tipo != 'evento') {
+      _errore('--formato json vale solo con --tipo evento', 64);
     }
     // Il canale istituzionale crawla una pagina-indice: da un RSS non ci sono
     // link di dettaglio da seguire, e il flag passerebbe silenziosamente per poi
@@ -486,6 +617,7 @@ class _Args {
           ? null
           : jsonDecode(m['selettori']!) as Map<String, dynamic>,
       push: push,
+      giorniAvanti: int.tryParse(m['giorni-avanti'] ?? '') ?? 30,
     );
   }
 }
