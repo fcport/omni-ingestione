@@ -24,7 +24,8 @@ class RssParser {
           url: link,
           testo: _testo(item, 'description'),
           immagine: _immagine(item),
-          data: parseData(_testo(item, 'pubDate')),
+          // Il `pubDate` è un istante: il fuso si applica (vedi `parseData`).
+          data: parseData(_testo(item, 'pubDate'), rispettaFuso: true),
         ),
       );
     }
