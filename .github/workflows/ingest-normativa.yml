@@ -1,0 +1,61 @@
+name: Ingestione normativa
+
+# Popola `atto_normativo` / `atto_normativo_brano`: leggi, decreti e regolamenti
+# di San Marino dall'Archivio del Consiglio Grande e Generale, più i testi
+# coordinati. È ciò che Omni-AI cita quando gli si chiede cosa dice una legge.
+#
+# OGNI NOTTE (01:29 UTC), sull'archivio INTERO dal 1600: l'elenco costa una
+# quarantina di pagine, e gli atti già in tabella non si riscaricano. Il primo
+# giro su 11.165 atti è un lavoro di ore e non sta in una notte: `--max-nuovi`
+# lo spezza, e ogni notte riprende da dove si era fermata la precedente (dal
+# più recente al più vecchio, così le novità entrano sempre per prime). A
+# regime il giro dura pochi minuti.
+#
+# Lontano dagli altri cron (istituzionale 02:43, bandi 03:17, feed dalle 05:05)
+# e mai al minuto :00, che GitHub salta nei picchi.
+#
+# `poppler-utils` dà `pdftotext`: in Dart puro un estrattore di testo da PDF
+# affidabile non c'è.
+on:
+  schedule:
+    - cron: '29 1 * * *'
+  workflow_dispatch:
+    inputs:
+      dal:
+        description: 'Anno iniziale'
+        default: '1600'
+      al:
+        description: 'Anno finale (vuoto = quest anno)'
+        default: ''
+      max_nuovi:
+        description: 'Atti nuovi al massimo in questo giro'
+        default: '2500'
+
+# NON si cancella un giro in corso: è il primo giro lungo, e ucciderlo a metà
+# per un dispatch manuale butterebbe ore di download.
+concurrency:
+  group: ingest-normativa
+  cancel-in-progress: false
+
+jobs:
+  ingest-normativa:
+    runs-on: ubuntu-latest
+    timeout-minutes: 345
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dart-lang/setup-dart@v1
+        with:
+          sdk: stable
+      - name: pdftotext
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq poppler-utils
+      - run: dart pub get
+      - name: Ingestione normativa
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          INGEST_TOKEN: ${{ secrets.INGEST_TOKEN }}
+        run: |
+          dart run bin/normativa.dart \
+            --dal "${{ inputs.dal || '1600' }}" \
+            ${{ inputs.al && format('--al {0}', inputs.al) || '' }} \
+            --max-nuovi "${{ inputs.max_nuovi || '2500' }}" \
+            --minuti 330 --coordinati --push
