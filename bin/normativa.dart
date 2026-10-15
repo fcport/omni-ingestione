@@ -103,12 +103,20 @@ Future<void> main(List<String> argv) async {
     final dal = (al - _anniPerFinestra(al) + 1).clamp(a.dal, al);
     final List<VoceArchivio> voci;
     try {
-      final (lette, totale) = await _elenco(client, dal, al);
+      final (lette, totale, grezze) = await _elenco(client, dal, al);
       voci = lette;
       // Il conto non torna: il parser ha perso delle righe o la paginazione è
-      // cambiata. Si lavora quello che c'è, ma il giro lo deve dire.
-      if (totale != null && lette.length < totale) {
-        errori.add('elenco $dal-$al: lette ${lette.length} voci su $totale');
+      // cambiata. Si lavora quello che c'è, ma il giro lo deve dire. Si
+      // confrontano le voci LETTE, non gli URL distinti: nell'archivio due atti
+      // possono puntare allo stesso PDF (i Decreti Consiliari 19 e 21 del 2010)
+      // — un errore dei dati del Consiglio, che qui non si può riparare e non
+      // deve far chiudere il giro in rosso tutte le notti.
+      if (totale != null && grezze < totale) {
+        errori.add('elenco $dal-$al: lette $grezze voci su $totale');
+      }
+      if (grezze > lette.length) {
+        stdout.writeln('  ($dal-$al: ${grezze - lette.length} voci con un PDF già '
+            'usato da un altro atto: tenuta la prima)');
       }
     } catch (e) {
       errori.add('elenco $dal-$al: $e');
@@ -203,25 +211,24 @@ Future<Set<String>> _noti() async {
 
 /// Tutte le voci di un intervallo, pagina dopo pagina, finché non tornano
 /// quante il server dice di averne.
-Future<(List<VoceArchivio>, int?)> _elenco(http.Client c, int dal, int al) async {
+Future<(List<VoceArchivio>, int?, int)> _elenco(http.Client c, int dal, int al) async {
   final voci = <VoceArchivio>[];
   final viste = <String>{};
   int? totale;
+  var grezze = 0;
   for (var pagina = 1; pagina <= 60; pagina++) {
     final byte = await _scarica(c, urlElenco(dal: dal, al: al, pagina: pagina).toString());
     final p = parseElenco(decodificaCp1252(byte));
     totale ??= p.totale;
-    var aggiunte = 0;
+    if (p.voci.isEmpty) break;
+    grezze += p.voci.length;
     for (final v in p.voci) {
-      if (viste.add(v.url)) {
-        voci.add(v);
-        aggiunte++;
-      }
+      if (viste.add(v.url)) voci.add(v);
     }
-    if (aggiunte == 0 || totale == null || voci.length >= totale) break;
+    if (totale == null || grezze >= totale) break;
     await Future<void>.delayed(const Duration(milliseconds: 800));
   }
-  return (voci, totale);
+  return (voci, totale, grezze);
 }
 
 Future<List<VoceArchivio>> _coordinati(http.Client c) async {

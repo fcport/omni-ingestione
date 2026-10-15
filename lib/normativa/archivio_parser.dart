@@ -16,6 +16,8 @@
 //    ricerca senza anno risponde ZERO risultati, con un 200. Le pagine arrivano
 //    fino a 300 voci (`P0_paginazione`).
 
+import 'dart:convert';
+
 import 'package:html/dom.dart';
 import 'package:html/parser.dart' as html;
 
@@ -41,13 +43,55 @@ const _cp1252 = {
   0x9E: 0x017E, 0x9F: 0x0178,
 };
 
-/// Decodifica byte Windows-1252.
+/// Decodifica byte Windows-1252 — con dentro, a tratti, UTF-8 vero.
+///
+/// 🪤 Il sito è Windows-1252, ma alcuni titoli sono stati salvati nel CMS come
+/// UTF-8: «40° anniversario» arriva come `34 30 C2 B0`, che letto in
+/// Windows-1252 diventa «40Â° anniversario», e «all’esportazione» diventa
+/// «allâ€™esportazione». Al primo giro erano 214 titoli su 6.600. Qui una
+/// sequenza UTF-8 VALIDA (primo byte C2-F4 seguito dal numero giusto di byte
+/// 80-BF) si legge come UTF-8, tutto il resto come Windows-1252. Nell'italiano
+/// scritto in Windows-1252 una lettera accentata («è», E8) non è mai seguita da
+/// byte di continuazione, quindi non ci sono falsi positivi.
 String decodificaCp1252(List<int> byte) {
   final sb = StringBuffer();
-  for (final b in byte) {
-    sb.writeCharCode(_cp1252[b] ?? b);
+  var i = 0;
+  while (i < byte.length) {
+    final n = _lunghezzaUtf8(byte, i);
+    if (n > 1) {
+      sb.write(utf8.decode(byte.sublist(i, i + n)));
+      i += n;
+      continue;
+    }
+    sb.writeCharCode(_cp1252[byte[i]] ?? byte[i]);
+    i++;
   }
   return sb.toString();
+}
+
+/// La lunghezza della sequenza UTF-8 multibyte valida che comincia in [i], o 0.
+int _lunghezzaUtf8(List<int> b, int i) {
+  final c = b[i];
+  final int n;
+  if (c >= 0xC2 && c <= 0xDF) {
+    n = 2;
+  } else if (c >= 0xE0 && c <= 0xEF) {
+    n = 3;
+  } else if (c >= 0xF0 && c <= 0xF4) {
+    n = 4;
+  } else {
+    return 0;
+  }
+  if (i + n > b.length) return 0;
+  for (var k = 1; k < n; k++) {
+    if (b[i + k] < 0x80 || b[i + k] > 0xBF) return 0;
+  }
+  try {
+    utf8.decode(b.sublist(i, i + n));
+    return n;
+  } on FormatException {
+    return 0;
+  }
 }
 
 /// L'URL della pagina [pagina] (da 1) dell'elenco degli atti fra il 1° gennaio

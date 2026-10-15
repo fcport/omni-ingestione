@@ -55,6 +55,18 @@ void main() {
       expect(decodificaCp1252([0x92]), '’');
     });
 
+    // 🪤 Il CMS salva alcuni titoli in UTF-8 dentro pagine Windows-1252: al
+    // primo giro 214 titoli su 6.600 arrivavano come «40Â° anniversario».
+    test('UTF-8 dentro Windows-1252: «Â°» e «â€™» tornano «°» e «’»', () {
+      // «40° anni» con il ° in UTF-8 (C2 B0)
+      expect(decodificaCp1252([0x34, 0x30, 0xC2, 0xB0, 0x20, 0x61, 0x6E, 0x6E, 0x69]), '40° anni');
+      // «all’esportazione» con l'apostrofo in UTF-8 (E2 80 99)
+      expect(decodificaCp1252([0x61, 0x6C, 0x6C, 0xE2, 0x80, 0x99, 0x65]), 'all’e');
+      // E l'italiano Windows-1252 normale resta com'è: «è» (E8) seguito da
+      // spazio, «à.» (E0 2E), l'apostrofo cp1252 (92).
+      expect(decodificaCp1252([0xE8, 0x20, 0xE0, 0x2E, 0x92]), 'è à.’');
+    });
+
     test('voci, numero, data, tipo e totale dalla pagina vera', () {
       final p = parseElenco(decodificaCp1252(_byte('elenco_2025.html')));
       expect(p.totale, 184);
