@@ -3,14 +3,15 @@
 Legge le fonti sammarinesi, normalizza quello che pubblicano, toglie i doppioni
 e lo consegna all'app [Omni](https://omnism.it).
 
-Quattro canali, cadenze diverse, tutti su GitHub Actions:
+Cinque canali, cadenze diverse, tutti su GitHub Actions:
 
 | Canale | Quando | Cosa porta |
 |---|---|---|
 | Notizie (RSS) | ogni ora, 7–23 | gli articoli delle testate |
 | Eventi (scraping) | ogni ora, 7–23 | i calendari degli eventi |
 | Bandi (gov.sm) | ogni notte | concorsi e selezioni, in coda di revisione |
-| Istituzionale | ogni lunedì | atti e comunicati, per l'assistente Omni-AI |
+| Istituzionale | ogni notte | atti e comunicati, per l'assistente Omni-AI |
+| Normativa | ogni notte | leggi, decreti, regolamenti e testi coordinati, per Omni-AI |
 
 Bandi e istituzionale sono arrivati qui il 2026-08-04, dal repo privato. Non per
 i minuti — insieme ne facevano una trentina al mese — ma perché i parser
@@ -46,6 +47,10 @@ che sa fare quattro cose e nient'altro:
 | `righe` | upsert su `notizia`, `evento`, `documento_istituzionale` — solo quelle |
 | `bandi` | la RPC che mette i bandi in coda di revisione, quella sola |
 | `esito` | scrive una riga di diagnostica nel registro |
+| `sorgente` | scarica il feed di una Fonte attiva dall'IP di Supabase |
+| `atti_noti` | gli URL degli atti normativi già in tabella |
+| `atto` | un atto normativo e i suoi brani, in una transazione |
+| `coordinati_vigenti` | ritira i testi coordinati superati da una versione nuova |
 
 Le azioni sono **nominate**: non esiste un'azione `rpc` con il nome della
 funzione a parametro, né una tabella scelta liberamente dal chiamante. Sarebbe
@@ -79,7 +84,22 @@ dart run bin/bandi.dart --limit 30 --push
 
 # Atti e comunicati per Omni-AI (crawl indice → pagine di dettaglio)
 bash tool/ingest_istituzionale.sh
+
+# Leggi e decreti dall'Archivio del Consiglio Grande e Generale (serve
+# `pdftotext`, pacchetto poppler-utils): dry-run su pochi atti, poi sul serio
+dart run bin/normativa.dart --dal 2025 --al 2025 --max-nuovi 5
+dart run bin/normativa.dart --dal 1600 --coordinati --push
 ```
+
+**La normativa** sono 11.165 atti dal 1600 a oggi, ognuno un PDF, più una
+novantina di testi coordinati (le leggi con le modifiche già dentro). Il primo
+giro è un lavoro di ore e si spezza su più notti (`--max-nuovi`); dopo, un atto
+già in tabella non si riscarica e il giro dura pochi minuti. Ogni atto è
+spezzato in **brani**, uno per articolo (`lib/normativa/brani.dart`): è
+l'unità che Omni-AI cerca e cita. Il titolo di ogni atto dice anche quali atti
+tocca («Modifica della Legge 25 luglio 2025 n.101»): `lib/normativa/riferimenti.dart`
+ne ricava le chiavi, e l'app le usa per avvisare che un testo è stato
+modificato dopo.
 
 **Aggiungere una testata non si fa qui:** è una riga nella tabella `fonte`, con
 il suo `config` (formato, tipo, url, selettori). Lo script chiede l'elenco al

@@ -11,6 +11,7 @@ environment:
 # Dart puro, niente Flutter: il runner gira su un runner Linux nudo e parte in
 # pochi secondi invece dei minuti che costa tirare su l'SDK Flutter.
 dependencies:
+  archive: ^3.6.1
   html: ^0.15.4
   http: ^1.2.2
   xml: ^6.5.0
