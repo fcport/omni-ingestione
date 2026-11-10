@@ -23,9 +23,17 @@ DateTime? parseData(String? grezzo, {bool rispettaFuso = false}) {
   final iso = DateTime.tryParse(s);
   if (iso != null) return iso;
 
-  // 2. RFC 822 usato da RSS: "Wed, 24 Jun 2026 09:30:00 +0000".
+  // 2. RFC 822 usato da RSS: "Wed, 24 Jun 2026 09:30:00 +0000", e le date per
+  //    esteso degli HTML con l'ora attaccata nei modi che si vedono in giro:
+  //    "11 nov 2026 21:00" (RTV), "martedì, 10 Novembre 2026 -21:00" (usc.sm,
+  //    The Events Calendar), "10 novembre 2026, ore 21.00".
+  //
+  //    Fino al 2026-11-10 fra anno e ora si accettava solo uno spazio: il
+  //    trattino di usc.sm faceva cadere l'ora, e 53 eventi su 53 finivano a
+  //    mezzanotte — cioè «senza ora» in app — con l'orario scritto lì accanto.
   final rfc = RegExp(
-    r'(\d{1,2})\s+([A-Za-z]{3,})\s+(\d{4})(?:\s+(\d{1,2}):(\d{2})(?::(\d{2}))?(?:\s*([+-]\d{2}:?\d{2}|[A-Za-z]{1,4})\b)?)?',
+    r'(\d{1,2})\s+([A-Za-z]{3,})\s+(\d{4})'
+    r'(?:\s*[-–—,]?\s*(?:[Oo]re\s+)?(\d{1,2})[:.](\d{2})(?::(\d{2}))?(?:\s*([+-]\d{2}:?\d{2}|[A-Za-z]{1,4})\b)?)?',
   ).firstMatch(s);
   if (rfc != null) {
     final mese = _mese(rfc.group(2)!);
