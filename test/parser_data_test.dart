@@ -62,6 +62,41 @@ void main() {
     });
   });
 
+  group('l\'ora degli Eventi accanto alla data', () {
+    // Il caso vero: usc.sm (The Events Calendar) scrive l'ora dopo un
+    // trattino, e il parser la perdeva — 53 eventi su 53 a mezzanotte.
+    test('usc.sm: «martedì, 10 Novembre 2026 -21:00»', () {
+      expect(
+        parseData('martedì, 10 Novembre 2026 -21:00'),
+        DateTime.utc(2026, 11, 10, 21),
+      );
+      expect(
+        parseData('giovedì, 12 Novembre 2026 - 20:45'),
+        DateTime.utc(2026, 11, 12, 20, 45),
+      );
+    });
+
+    test('RTV: «11 nov 2026 21:00», anche su più righe', () {
+      expect(parseData('11 nov 2026 21:00'), DateTime.utc(2026, 11, 11, 21));
+      expect(
+        parseData('11 nov 2026\n          21:00'),
+        DateTime.utc(2026, 11, 11, 21),
+      );
+    });
+
+    test('«, ore 21.00»', () {
+      expect(
+        parseData('10 novembre 2026, ore 21.00'),
+        DateTime.utc(2026, 11, 10, 21),
+      );
+    });
+
+    test('senza ora resta mezzanotte (= «senza ora» in app)', () {
+      expect(parseData('sabato, 14 Novembre 2026'), DateTime.utc(2026, 11, 14));
+      expect(parseData('27 set 2026'), DateTime.utc(2026, 9, 27));
+    });
+  });
+
   test('il parser RSS applica il fuso del pubDate', () {
     const xml = '''<?xml version="1.0"?><rss><channel><item>
 <title>Notizia RTV</title><link>https://www.sanmarinortv.sm/news/x</link>
