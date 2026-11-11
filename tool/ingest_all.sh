@@ -65,12 +65,14 @@ while read -r f; do
   fnome="$(echo "$f" | jq -r '.nome')"
   furl="$(echo "$f" | jq -r '.config.url')"
   fsel="$(echo "$f" | jq -c '.config.selettori')"
+  # Facoltativo: dove trovare l'ora nella pagina del singolo evento (RTV).
+  fdet="$(echo "$f" | jq -c '.config.dettaglio // empty')"
   if [ -z "$furl" ] || [ "$furl" = "null" ]; then
     echo "  (salto $fnome: manca config.url)"; continue
   fi
   echo "→ $fnome (fonte $fid) — eventi scraping"
   if ! dart run bin/ingest.dart --formato html --tipo evento --fonte "$fid" \
-    --url "$furl" --selettori "$fsel" --push; then
+    --url "$furl" --selettori "$fsel" ${fdet:+--dettaglio "$fdet"} --push; then
     echo "  ⚠ $fnome: ingestione fallita, continuo"
     ko+=("$fnome")
   fi

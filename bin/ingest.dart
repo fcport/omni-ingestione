@@ -38,6 +38,7 @@ import 'package:html/parser.dart' as html;
 import 'package:http/http.dart' as http;
 import 'package:omni_ingestione/documento_grezzo.dart';
 import 'package:omni_ingestione/html_extractor.dart';
+import 'package:omni_ingestione/ora_dal_dettaglio.dart';
 import 'package:omni_ingestione/normalizzatore.dart';
 import 'package:omni_ingestione/parser_data.dart';
 import 'package:omni_ingestione/ponte.dart';
@@ -52,7 +53,7 @@ Future<void> main(List<String> argv) async {
     return;
   }
 
-  final List<DocumentoGrezzo> documenti;
+  List<DocumentoGrezzo> documenti;
   if (args.formato == 'json') {
     try {
       documenti = await _eventiDaWordpress(args);
@@ -81,6 +82,26 @@ Future<void> main(List<String> argv) async {
         SelettoriHtml.fromMap(sel),
         baseUrl: args.base ?? args.url,
       );
+      // Le Fonti che nell'elenco danno solo il giorno e l'ora la tengono nel
+      // dettaglio (San Marino RTV): `fonte.config.dettaglio`. Vedi
+      // lib/ora_dal_dettaglio.dart.
+      final dettaglio = ConfigDettaglio.daMappa(args.dettaglio);
+      if (args.tipo == 'evento' && dettaglio != null) {
+        try {
+          documenti = await arricchisciOra(
+            documenti,
+            cfg: dettaglio,
+            noti: (chiavi) => _eventiNoti(args, chiavi),
+            scarica: (url) => _fetchDettaglio(url, args.fonte),
+            log: stderr.writeln,
+          );
+        } catch (e) {
+          // Senza sapere cosa c'è in DB non si consegna: l'upsert riporterebbe
+          // a mezzanotte le ore trovate ai giri prima. Meglio un giro rosso.
+          await _registraEsito(args, esito: 'errore', errore: 'dettaglio: $e');
+          _errore('dettaglio: $e', 1);
+        }
+      }
     }
   }
 
@@ -290,6 +311,63 @@ Future<String> _fetchUrl(String url, {int? fonteDiRipiego}) async {
     return _dalPonte(fonteDiRipiego, url, resp.statusCode);
   }
   throw StateError('Fetch fallito (${resp.statusCode}) da $url');
+}
+
+/// Le date in DB degli Eventi della Fonte, per `dedup_key`. In dry-run senza
+/// ponte non c'è niente da proteggere: mappa vuota. Con `--push` invece il
+/// ponte deve rispondere, o il giro si ferma (vedi il chiamante).
+Future<Map<String, DateTime>> _eventiNoti(_Args args, List<String> chiavi) async {
+  final resp = await ponte({
+    'azione': 'eventi_noti',
+    'fonte_id': args.fonte,
+    'dedup_keys': chiavi,
+  });
+  if (resp == null) {
+    if (args.push) throw StateError('ponte non configurato');
+    return {};
+  }
+  if (resp.statusCode >= 300) {
+    throw StateError('eventi_noti: ${resp.statusCode} ${resp.body}');
+  }
+  final eventi = (jsonDecode(resp.body) as Map<String, dynamic>)['eventi'];
+  return {
+    for (final e in (eventi as List).cast<Map<String, dynamic>>())
+      e['dedup_key'] as String: DateTime.parse(e['data_inizio'] as String),
+  };
+}
+
+/// Una pagina di dettaglio: diretta, e dal ponte (azione `dettaglio`, solo
+/// sullo stesso host della Fonte) se la testata rifiuta l'IP del runner. Con
+/// una pausa prima, per non presentarsi a raffica a chi ci ha già bloccato.
+Future<String> _fetchDettaglio(String url, int fonteId) async {
+  await Future<void>.delayed(const Duration(milliseconds: 700));
+  final resp = await http.get(
+    Uri.parse(url),
+    headers: const {
+      'User-Agent':
+          'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
+          '(KHTML, like Gecko) Chrome/124.0 Safari/537.36',
+      'Accept': 'text/html, */*;q=0.8',
+    },
+  );
+  if (resp.statusCode < 300) return resp.body;
+  if (resp.statusCode != 403 && resp.statusCode != 429) {
+    throw StateError('${resp.statusCode}');
+  }
+  final viaPonte = await ponte({
+    'azione': 'dettaglio',
+    'fonte_id': fonteId,
+    'url': url,
+  });
+  if (viaPonte == null || viaPonte.statusCode >= 300) {
+    throw StateError(
+      '${resp.statusCode} diretto, ponte ${viaPonte?.statusCode ?? 'assente'}',
+    );
+  }
+  final contenuto =
+      (jsonDecode(viaPonte.body) as Map<String, dynamic>)['contenuto'];
+  if (contenuto is! String) throw StateError('ponte senza contenuto');
+  return contenuto;
 }
 
 /// Il ripiego: il feed lo scarica il ponte, dall'IP di Supabase.
@@ -558,6 +636,7 @@ class _Args {
     this.url,
     this.base,
     this.selettori,
+    this.dettaglio,
     this.push = false,
     this.giorniAvanti = 30,
   });
@@ -569,6 +648,10 @@ class _Args {
   final String? url;
   final String? base; // base per risolvere URL relativi (default: url)
   final Map<String, dynamic>? selettori;
+
+  /// `fonte.config.dettaglio`: dove trovare l'ora nella pagina del singolo
+  /// Evento (lib/ora_dal_dettaglio.dart).
+  final Map<String, dynamic>? dettaglio;
   final bool push;
 
   /// Solo `--formato json`: quanti giorni avanti tenere le occorrenze.
@@ -616,6 +699,11 @@ class _Args {
       selettori: m['selettori'] == null
           ? null
           : jsonDecode(m['selettori']!) as Map<String, dynamic>,
+      dettaglio: switch (m['dettaglio']) {
+        final d? when d.isNotEmpty && d != 'null' =>
+          jsonDecode(d) as Map<String, dynamic>,
+        _ => null,
+      },
       push: push,
       giorniAvanti: int.tryParse(m['giorni-avanti'] ?? '') ?? 30,
     );
